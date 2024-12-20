@@ -1,22 +1,92 @@
-from openai import AsyncOpenAI
 import os
-from typing import List
+import json
+import logging
+
+
+from openai import AsyncOpenAI
 from .custom_types import (
     ResponseRequiredRequest,
     ResponseResponse,
     Utterance,
 )
+from typing import List
 
-begin_sentence = "Hey there, I'm your personal AI therapist, how can I help you?"
-agent_prompt = "Task: As a professional therapist, your responsibilities are comprehensive and patient-centered. You establish a positive and trusting rapport with patients, diagnosing and treating mental health disorders. Your role involves creating tailored treatment plans based on individual patient needs and circumstances. Regular meetings with patients are essential for providing counseling and treatment, and for adjusting plans as needed. You conduct ongoing assessments to monitor patient progress, involve and advise family members when appropriate, and refer patients to external specialists or agencies if required. Keeping thorough records of patient interactions and progress is crucial. You also adhere to all safety protocols and maintain strict client confidentiality. Additionally, you contribute to the practice's overall success by completing related tasks as needed.\n\nConversational Style: Communicate concisely and conversationally. Aim for responses in short, clear prose, ideally under 10 words. This succinct approach helps in maintaining clarity and focus during patient interactions.\n\nPersonality: Your approach should be empathetic and understanding, balancing compassion with maintaining a professional stance on what is best for the patient. It's important to listen actively and empathize without overly agreeing with the patient, ensuring that your professional opinion guides the therapeutic process."
+logger = logging.getLogger(__name__)
+
+
+available_slots = {
+    "2023-07-01": ["10:00", "11:00", "14:00", "15:00"],
+    "2023-07-02": ["09:00", "10:00", "11:00", "14:00"],
+    "2023-07-03": ["11:00", "13:00", "14:00", "16:00"],
+    "2023-07-04": ["10:00", "12:00", "15:00", "16:00"],
+}
+
+appointments = []
+
+
+def book_appointment(name, phone, email, appointment_date):
+    # Implement your appointment booking logic here
+    logger.info(f"Appointment booked for {name} on {appointment_date}. We will contact you at {phone} or {email}.")
+
+    if date in available_slots[doctor_name] and time in available_slots[doctor_name][date]:
+        available_slots[date].remove(time)
+        appointments.append({
+            "name": name,
+            "phone": phone,
+            "email": email,
+            "appointment_date": appointment_date
+        })
+        return True
+    return False
+
+
+def check_availability(date):
+    return available_slots.get(date, [])
+
+
+begin_sentence = "Hey there, I'm your personal hair salon assistant, how can I help you?"
+agent_prompt = """You are assisting customers with inquiries about our hair salon "Filpino haircuts". Please provide the following information so the customer can accurately answer their questions about services, pricing, and scheduling, ultimately improving customer satisfaction and efficiency:
+ * List of all hair services offered: 
+    - haircut
+    - coloring
+    - extensions
+    - special hair treatment
+ * Pricing for each service:
+    - Women's Cut: 400 philippines pesos
+    - Men's Cut: 300 philippines pesos
+    - Full Highlights: 120-180 philippines pesos (depending on length and thickness)
+    - Coloring: 400 philippines pesos
+    - Make-up: 100 philippines pesos
+ * Pricing for packages:
+    - Wedding Package: Includes haircut, styling, and makeup for 1250 philippines pesos
+ * Discounts
+    - Student Discount: 10% off showing the student card
+ * Salon hours of operation: 
+    Monday-Friday: 9:00 AM - 7:00 PM
+    Saturday: 9:00 AM - 5:00 PM
+    Closed Sundays
+ * Appointment policies: Appointments recommended, walk-ins welcome on availability. Online booking available through https:///www.hairsalon.ph
+ * Contact information:
+    Phone number: 0902392393
+    Email: info@hairsalon.ph
+    Salon address: SM Mega Mall, floor 1, beside SM supermarket
+Optional additions:
+ * Our team: 
+    John Doe: Color Specialist
+    Jane Smith: Cutting and Styling Expert
+ * Information about the salon's atmosphere and amenities: Relaxing ambiance. Complimentary beverages, Free Wi-Fi.
+ * Our hair salon "Filipino haircuts" provides exceptional hair and make-ups services with the highest level of customer satisfaction doing everything we can to meet your expectations
+"""
 
 
 class LlmClient:
-    def __init__(self):
+    def __init__(self, model="gpt-4o-mini"):
         self.client = AsyncOpenAI(
-            organization=os.environ["OPENAI_ORGANIZATION_ID"],
+            organization=os.environ.get("OPENAI_ORGANIZATION_ID"),
             api_key=os.environ["OPENAI_API_KEY"],
+            model=model
         )
+        self.model = model
 
     def draft_begin_message(self):
         response = ResponseResponse(
@@ -59,15 +129,136 @@ class LlmClient:
             )
         return prompt
 
+    # Step 1: Prepare the function calling definition to the prompt
+    def prepare_functions(self):
+        functions = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "end_call",
+                    "description": "End the call only when user explicitly requests it.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "message": {
+                                "type": "string",
+                                "description": "The message you will say before ending the call with the customer.",
+                            },
+                        },
+                        "required": ["message"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "detect_user_intent",
+                    "description": """According to the conversation, select one of the next user intents if it's possible:
+    - appointment: the user wants to make an appointment
+    - appointment_confirmation: the user confirms the information regarding the appointment
+    - information_inquiry: the user wants information about the service
+    - complain: the user is complaining
+    - thanks: the user is complimenting the service
+""",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "intention": {
+                                "type": "string",
+                                "description": "The intention of the user.",
+                                "enum": ["appointment", "appointment_confirmation", "information_inquiry", "complain", "thanks"]
+                            },
+                        },
+                        "required": ["intention"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "check_availability",
+                    "description": "Check available time slots for a given date",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "date": {
+                                "type": "string",
+                                "description": "The date to check availability for, in YYYY-MM-DD format"
+                            }
+                        },
+                        "required": ["date"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "book_appointment",
+                    "description": "Book an appointment for the service if the user confirms the relevant information for the appointment: date, time, name, email and phone",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "date": {
+                                "type": "string",
+                                "description": "The date for the appointment, in YYYY-MM-DD format"
+                            },
+                            "time": {
+                                "type": "string",
+                                "description": "The time for the appointment, in HH:MM format"
+                            },
+                            "customer_name": {
+                                "type": "string",
+                                "description": "The name of the customer"
+                            },
+                            "customer_email": {
+                                "type": "string",
+                                "description": "The email of the customer"
+                            },
+                            "customer_phone": {
+                                "type": "string",
+                                "description": "The phone of the customer"
+                            }
+                        },
+                        "required": ["date", "time", "customer_name", "customer_email", "customer_phone"]
+                    }
+                }
+            }
+        ]
+        return functions
+
     async def draft_response(self, request: ResponseRequiredRequest):
         prompt = self.prepare_prompt(request)
+        func_call = {}
+        func_arguments = ""
         stream = await self.client.chat.completions.create(
             model="gpt-4-turbo-preview",  # Or use a 3.5 model for speed
             messages=prompt,
             stream=True,
+            # Step 2: Add the function into your request
+            tools=self.prepare_functions(),
         )
+
         async for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
+            # Step 3: Extract the functions
+            if len(chunk.choices) == 0:
+                continue
+            if chunk.choices[0].delta.tool_calls:
+                tool_calls = chunk.choices[0].delta.tool_calls[0]
+                if tool_calls.id:
+                    if func_call:
+                        # Another function received, old function complete, can break here.
+                        break
+                    func_call = {
+                        "id": tool_calls.id,
+                        "func_name": tool_calls.function.name or "",
+                        "arguments": {},
+                    }
+                else:
+                    # append argument
+                    func_arguments += tool_calls.function.arguments or ""
+
+            # Parse transcripts
+            if chunk.choices[0].delta.content:
                 response = ResponseResponse(
                     response_id=request.response_id,
                     content=chunk.choices[0].delta.content,
@@ -76,11 +267,49 @@ class LlmClient:
                 )
                 yield response
 
-        # Send final response with "content_complete" set to True to signal completion
-        response = ResponseResponse(
-            response_id=request.response_id,
-            content="",
-            content_complete=True,
-            end_call=False,
-        )
-        yield response
+        # Step 4: Call the functions
+        if func_call:
+            function_name = func_call["func_name"]
+            if function_name == "end_call":
+                func_call["arguments"] = json.loads(func_arguments)
+                response = ResponseResponse(
+                    response_id=request.response_id,
+                    content=func_call["arguments"]["message"],
+                    content_complete=True,
+                    end_call=True,
+                )
+                yield response
+
+            elif function_name == "check_availability":
+                available_times = check_availability(function_args['date'])
+                response = ResponseResponse(
+                    response_id=request.response_id,
+                    content=f"Available times on {function_args['date']}: {', '.join(available_times)}",
+                    content_complete=True,
+                    end_call=False,
+                )
+                yield response
+            elif function_name == "book_appointment":
+                success = book_appointment(
+                    function_args['date'],
+                    function_args['time'],
+                    function_args['customer_name'],
+                    function_args['customer_email'],
+                    function_args['customer_phone']
+                )
+                response = ResponseResponse(
+                    response_id=request.response_id,
+                    content="Appointment booked successfully!" if success else "Sorry, that time slot is not available.",
+                    content_complete=True,
+                    end_call=False,
+                )
+                yield response
+        else:
+            # No functions, complete response
+            response = ResponseResponse(
+                response_id=request.response_id,
+                content="",
+                content_complete=True,
+                end_call=False,
+            )
+            yield response

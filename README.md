@@ -1,9 +1,6 @@
-# retell-custom-llm-python-demo
+# retellai_booking_api_demo
 
-This is a sample demo repo to show how to have your own LLM plugged into Retell.
-
-This repo currently uses `OpenAI` endpoint. Feel free to contribute to make
-this demo more realistic.
+This is a phone calling hair salon chatbot using Retell API.
 
 ## Steps to run in localhost
 
@@ -35,8 +32,3 @@ the agent you created should connect with your localhost.
 
 The custom LLM URL would look like
 `wss://dc14-2601-645-c57f-8670-9986-5662-2c9a-adbd.ngrok-free.app/llm-websocket`
-
-## Run in prod
-
-To run in prod, you probably want to customize your LLM solution, host the code
-in a cloud, and use that IP to create agent.
