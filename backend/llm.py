@@ -1,15 +1,18 @@
 import os
 import json
 import logging
+from typing import List
 
 
 from openai import AsyncOpenAI
+
 from .custom_types import (
     ResponseRequiredRequest,
     ResponseResponse,
     Utterance,
 )
-from typing import List
+from .llm_fsm.fsm import LLMStateMachine
+
 
 logger = logging.getLogger(__name__)
 
