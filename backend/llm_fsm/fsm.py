@@ -1,30 +1,18 @@
 import logging
 from functools import wraps
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Type
+from typing import Any, Callable, Dict, Optional, Type, List
+
+
+from litellm.types.completion import ChatCompletionMessageParam
 
 
 from .fsm_state import (
     LLMFSMState, ConversationFSMState
 )
+from .exceptions import FSMError, TransitionException, TransitionRequired, TransitionsNotAllowed, InvalidTransition
 
 logger = logging.getLogger(__name__)
-
-
-class FSMError(Exception):
-    pass
-
-class TransitionException(FSMError):
-    pass
-
-class TransitionRequired(TransitionException):
-    pass
-
-class TransitionsNotAllowed(TransitionException):
-    pass
-
-class InvalidTransition(TransitionException):
-    pass
 
 
 @dataclass
@@ -35,7 +23,7 @@ class FSMRun:
 
 
 END_STATE = "end"
-
+START_STATE = "start"
 
 class LLMStateMachine:
     """
@@ -51,14 +39,18 @@ class LLMStateMachine:
     """
     llm_state_class = LLMFSMState
 
-    def __init__(self, initial_state: str, end_state: str = END_STATE, allowed_transitions: Dict[str, str] = None):
+    def __init__(self, initial_state: str = START_STATE, end_state: str = END_STATE, allowed_transitions: Dict[str, str] = None, default_llm_model: str | None = None, default_temperature: str | None = None, common_tools=None):
         self._state = initial_state
         self._initial_state = initial_state
         self._end_state = end_state
         self._state_registry = {}
         self._state_transition_log = []
-        self._allowed_transitions = allowed_transitions or {}
+        self._allowed_transitions_per_node = allowed_transitions or {}
         self._started = False
+        self._default_llm_model = default_llm_model
+        self._default_temperature = default_temperature
+        self._common_tools = common_tools
+
         self.data = {}
 
     @property
@@ -71,9 +63,9 @@ class LLMStateMachine:
 
     def add_state_transition(self, start_state, end_state):
         if start_state not in self._state_registry:
-            self._state_registry[start_state] = []
+            self._allowed_transitions_per_node[start_state] = []
 
-        self._state_registry[start_state].append(end_state)
+        self._allowed_transitions_per_node[start_state].append(end_state)
 
     @property    
     def started(self):
@@ -96,7 +88,6 @@ class LLMStateMachine:
         user_input: str | None = None,
         chat_history: list | None = None,
         tools: list | Callable | None = None,
-        response_model: Optional[BaseModel] = None,
         **kwargs
     ):
         """
@@ -110,10 +101,21 @@ class LLMStateMachine:
         - system_message (str): Instructions provided to the LLM when this state is active.
         - preprocess_prompt_template (Optional[Callable]): A func to preprocess the sys prompt for the LLM.
         - temperature (float): Determines the randomness of LLM responses, defaults at 0.5.
-        - response_model (Optional[BaseModel]): A Pydantic model for parsing and validating the LLM's response.
         Returns:
         - callable The original function wrapped and registered with the FSM.
         """
+
+        if llm_model is None:
+            llm_model = self._default_llm_model
+
+        if temperature is None:
+            temperature = self._default_temperature
+
+        if self._common_tools:
+            if tools is None:
+                tools = self._common_tools
+            else:
+                tools = self._common_tools + tools
 
         @wraps(func)
         async def wrapper(*args, **kwargs):
@@ -128,7 +130,7 @@ class LLMStateMachine:
 
                 # Register the state in the FSM's registry with the provided metadata
                 self.add_state_callback(state_key, self.llm_state_class(
-                    key=state_key,
+                    state_key=state_key,
                     temperature=temperature,
                     llm_model=llm_model,
                     function_def_transition_selector=func,
@@ -136,7 +138,6 @@ class LLMStateMachine:
                     user_input=user_input,
                     chat_history=chat_history,
                     tools=tools,
-                    response_model=response_model,
                     **kwargs
                 ))
                 return wrapper
@@ -146,12 +147,10 @@ class LLMStateMachine:
                 state_key = function_def_transition_selector.__name__
 
             self.add_state_callback(state_key, self.llm_state_class(
-                key=state_key,
-                prompt_template=prompt_template,
+                state_key=state_key,
                 temperature=temperature,
                 llm_model=llm_model,
                 function_def_transition_selector=function_def_transition_selector,
-                response_model=response_model,
                 system_message=system_message,
                 user_input=user_input,
                 chat_history=chat_history,
@@ -182,22 +181,20 @@ class LLMStateMachine:
         if data is not None:
             self.data.update(data)
 
-        allowed_transitions_per_node = self._allowed_transitions
-
         i = 0
         while i < max_n:
             state = self._state
             if stop_before_state == state:
                 break
 
-            state_node_func: FSMState = self._state_registry.get(state)
+            state_node_func: LLMFSMState = self._state_registry.get(state)
             if not state_node_func:
                 raise FSMError(f"State '{state}' not found in the state registry.")
 
             # Extract response and next state
             next_state = await state_node_func(self._data)
 
-            allowed_transitions = allowed_transitions_per_node.get(state)
+            allowed_transitions = self._allowed_transitions_per_node.get(state)
 
             if next_state is None:
                 if allowed_transitions:
@@ -215,7 +212,7 @@ class LLMStateMachine:
                 if allowed_transitions is None:
                     raise TransitionsNotAllowed()
                 elif next_state not in allowed_transitions:
-                    raise InvalidTransition(f"Transition to {next_state_key} not allowed")
+                    raise InvalidTransition(f"Transition to {next_state} not allowed")
 
             self._state = next_state
             self._state_transition_log.append([state, next_state])
@@ -279,7 +276,6 @@ class ConversationalLLMStateMachine(LLMStateMachine):
         preprocess_prompt_template: Optional[Callable] = None,
         temperature: float = 0.5,
         transitions: Dict[str, str] = None,
-        response_model: Optional[BaseModel] = None, 
         preprocess_input: Optional[Callable] = None,
         preprocess_chat: Optional[Callable] = None,
         **kwargs):
@@ -290,7 +286,6 @@ class ConversationalLLMStateMachine(LLMStateMachine):
             preprocess_prompt_template=preprocess_prompt_template,
             temperature=temperature,
             transitions=transitions,
-            response_model=response_model, 
             preprocess_input=preprocess_input,
             preprocess_chat=preprocess_chat,
             chat_history_key=self.chat_history_key,
@@ -321,5 +316,5 @@ class ConversationalLLMStateMachine(LLMStateMachine):
 
         self.data[self.user_input_key] = user_input
         result = super().run_state_machine(**kwargs)
-        self.add_message("user", user_input)
+
         return result

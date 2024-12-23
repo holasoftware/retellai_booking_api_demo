@@ -196,8 +196,8 @@ class LlmClient:
             {
                 "type": "function",
                 "function": {
-                    "name": "book_appointment",
-                    "description": "Book an appointment for the service if the user confirms the relevant information for the appointment: date, time, name, email and phone",
+                    "name": "schedule_appointment",
+                    "description": "Schedule an appointment for the service if the user confirms the relevant information for the appointment: date, time, name, email and phone",
                     "parameters": {
                         "type": "object",
                         "properties": {
