@@ -117,23 +117,22 @@ class LLMStateMachine:
             else:
                 tools = self._common_tools + tools
 
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            return await func(*args, **kwargs)
-
         if function_def_transition_selector is None:               
             def decorator(func: Callable):
+                nonlocal state_key
                 if state_key is None:
                     state_key = func.__name__
 
-                func = wrapper(func)
+                @wraps(func)
+                async def wrapper(*args, **kwargs):
+                    return await func(*args, **kwargs)
 
                 # Register the state in the FSM's registry with the provided metadata
                 self.add_state_callback(state_key, self.llm_state_class(
                     state_key=state_key,
                     temperature=temperature,
                     llm_model=llm_model,
-                    function_def_transition_selector=func,
+                    function_def_transition_selector=wrapper,
                     system_message=system_message,
                     user_input=user_input,
                     chat_history=chat_history,
@@ -146,11 +145,15 @@ class LLMStateMachine:
             if state_key is None:
                 state_key = function_def_transition_selector.__name__
 
+            @wraps(function_def_transition_selector)
+            async def wrapper(*args, **kwargs):
+                return await function_def_transition_selector(*args, **kwargs)
+
             self.add_state_callback(state_key, self.llm_state_class(
                 state_key=state_key,
                 temperature=temperature,
                 llm_model=llm_model,
-                function_def_transition_selector=function_def_transition_selector,
+                function_def_transition_selector=wrapper,
                 system_message=system_message,
                 user_input=user_input,
                 chat_history=chat_history,
@@ -269,25 +272,11 @@ class LLMStateMachine:
 class ConversationalLLMStateMachine(LLMStateMachine):
     chat_history_key = "chat_history"
     user_input_key = "user_input"
+    llm_state_class = ConversationFSMState
 
-    def define_state(self,
-        state_key: str,
-        prompt_template: str,
-        preprocess_prompt_template: Optional[Callable] = None,
-        temperature: float = 0.5,
-        transitions: Dict[str, str] = None,
-        preprocess_input: Optional[Callable] = None,
-        preprocess_chat: Optional[Callable] = None,
-        **kwargs):
-
+    def define_state(self, *args, **kwargs):
         return super().define_state(
-            state_key=state_key,
-            prompt_template=prompt_template,
-            preprocess_prompt_template=preprocess_prompt_template,
-            temperature=temperature,
-            transitions=transitions,
-            preprocess_input=preprocess_input,
-            preprocess_chat=preprocess_chat,
+            *args,
             chat_history_key=self.chat_history_key,
             user_input_key=self.user_input_key,
             **kwargs)
