@@ -7,6 +7,11 @@ from llm_fsm import ConversationalLLMStateMachine
 logger = logging.getLogger(__name__)
 
 
+INFORMATION_INQUIRY_STATE = "information_inquiry"
+APPOINTMENT_STATE = "appointment"
+APPOINTMENT_CONFIRM_STATE = "appointment_confirm"
+
+
 BEGIN_SENTENCE = "Hey there, I'm your personal hair salon assistant, how can I help you?"
 def get_generic_system_message(data):
     system_message = """Goal: You are assisting customers with inquiries about our hair salon "Filpino haircuts". Answer their questions about services and pricing, and schedule appointments. Information about the hair salon:
@@ -340,27 +345,27 @@ def appointment_confirm_state_system_message(data):
 def create_appointment_chatbot():
     state_machine = ConversationalLLMStateMachine(initial_state="general_inquiries", default_llm_model="gpt-4o-mini", common_tools=[end_call_tool, detect_user_intent_tool])
 
-    @state_machine.define_state(system_message=get_generic_system_message, tools=[ask_schedule_appointment_tool])
-    def general_inquiries(data):
+    @state_machine.define_state(state_key=INFORMATION_INQUIRY_STATE, system_message=get_generic_system_message, tools=[ask_schedule_appointment_tool])
+    def information_inquiry(data):
         data_tools = data["tools"]
 
         if "ask_schedule_appointment" in data_tools:
-            return "appointment"
+            return APPOINTMENT_STATE
         else:
-            return "general_inquiries"
+            return INFORMATION_INQUIRY_STATE
 
-    @state_machine.define_state(system_message=appointment_state_system_message, tools=[extract_appointment_date_tool, extract_appointment_start_time_tool, extract_appointment_customer_name_tool, extract_appointment_customer_email_tool, extract_appointment_customer_phone_tool], precomputed_values=appointment_state_precomputed_values)
+    @state_machine.define_state(state_key=APPOINTMENT_STATE, system_message=appointment_state_system_message, tools=[extract_appointment_date_tool, extract_appointment_start_time_tool, extract_appointment_customer_name_tool, extract_appointment_customer_email_tool, extract_appointment_customer_phone_tool], precomputed_values=appointment_state_precomputed_values)
     def appointment(data):
         user_intent = data.get("user_intent")
 
         if user_intent in ("appointment", "appointment_change_information"):
-            return "appointment"
+            return APPOINTMENT_STATE
         elif user_intent == "appointment_confirmation":
-            return "appointment_confirm"
+            return APPOINTMENT_CONFIRM_STATE
         else:
-            return "information_inquiry"
+            return INFORMATION_INQUIRY_STATE
 
-    @state_machine.define_state(system_message=appointment_confirm_state_system_message, tools=[appointment_confirmation_tool])
+    @state_machine.define_state(state_key=APPOINTMENT_CONFIRM_STATE, system_message=appointment_confirm_state_system_message, tools=[appointment_confirmation_tool])
     def appointment_confirm(data):
         user_intent = data.get("user_intent")
 
@@ -375,13 +380,13 @@ def create_appointment_chatbot():
 
                 schedule_appointment(date=appointment_date, start_time=appointment_start_time, name=customer_name, phone=customer_phone, email=customer_email)
 
-                return "information_inquiry"
+                return INFORMATION_INQUIRY_STATE
             elif user_intent == "appointment_change_information":
-                return "appointments"
+                return APPOINTMENT_STATE
             else:
-                return "information_inquiry"
+                return INFORMATION_INQUIRY_STATE
         else:
-            return "information_inquiry"
+            return INFORMATION_INQUIRY_STATE
 
     return state_machine
 
