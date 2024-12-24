@@ -195,31 +195,33 @@ class LLMStateMachine:
                 raise FSMError(f"State '{state}' not found in the state registry.")
 
             # Extract response and next state
-            next_state = await state_node_func(self._data)
+            next_state = await state_node_func(self.data)
 
-            allowed_transitions = self._allowed_transitions_per_node.get(state)
-
+#            allowed_transitions = self._allowed_transitions_per_node.get(state)
+#
+#            if next_state is None:
+#                if allowed_transitions:
+#                    num_allowed_transitions = len(allowed_transitions)
+#                else:
+#                    num_allowed_transitions = 0
+#
+#                if num_allowed_transitions == 0:
+#                    next_state = self._end_state
+#                elif num_allowed_transitions == 1:
+#                    next_state = allowed_transitions[0]
+#                else:
+#                    raise TransitionRequired()
+#            else:
+#                if allowed_transitions is None:
+#                    raise TransitionsNotAllowed()
+#                elif next_state not in allowed_transitions:
+#                    raise InvalidTransition(f"Transition to {next_state} not allowed")
+#
             if next_state is None:
-                if allowed_transitions:
-                    num_allowed_transitions = len(allowed_transitions)
-                else:
-                    num_allowed_transitions = 0
-
-                if num_allowed_transitions == 0:
-                    next_state = self._end_state
-                elif num_allowed_transitions == 1:
-                    next_state = allowed_transitions[0]
-                else:
-                    raise TransitionRequired()
-            else:
-                if allowed_transitions is None:
-                    raise TransitionsNotAllowed()
-                elif next_state not in allowed_transitions:
-                    raise InvalidTransition(f"Transition to {next_state} not allowed")
+                break
 
             self._state = next_state
             self._state_transition_log.append([state, next_state])
-            i += 1
 
             if self.is_completed():
                 self.on_complete()
@@ -227,6 +229,8 @@ class LLMStateMachine:
 
             if stop_before_state == next_state:
                 break
+
+            i += 1
 
         return FSMRun(
             i=i,
@@ -272,6 +276,8 @@ class LLMStateMachine:
 class ConversationalLLMStateMachine(LLMStateMachine):
     chat_history_key = "chat_history"
     user_input_key = "user_input"
+    assistant_answer_key="assistant_answer"
+
     llm_state_class = ConversationFSMState
 
     def define_state(self, *args, **kwargs):
@@ -279,6 +285,7 @@ class ConversationalLLMStateMachine(LLMStateMachine):
             *args,
             chat_history_key=self.chat_history_key,
             user_input_key=self.user_input_key,
+            assistant_answer_key=self.assistant_answer_key,
             **kwargs)
 
     def add_message(self, role, content):
@@ -304,6 +311,10 @@ class ConversationalLLMStateMachine(LLMStateMachine):
         kwargs.setdefault("max_n", 1)
 
         self.data[self.user_input_key] = user_input
-        result = super().run_state_machine(**kwargs)
+        result = await super().run_state_machine(**kwargs)
 
         return result
+
+    async def ask(self, user_input):
+        result = await self.run_state_machine(user_input)
+        return result.state[self.assistant_answer_key]

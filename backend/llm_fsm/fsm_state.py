@@ -175,7 +175,7 @@ class LLMFSMState:
         self.init_precomputed_values()
 
         messages = self.get_messages()
-        tools = self.get_tools()
+        tools = self.tools
 
         kw = {
             "model": self.llm_model,
@@ -298,7 +298,8 @@ class LLMFSMState:
 
     async def __call__(self, data):
         state = self.clone(data=data)
-        return state.step()
+        result = await state.step()
+        return result
 
 
 @dataclass
@@ -335,10 +336,17 @@ class ConversationFSMState(LLMFSMState):
         return assistant_output
 
     def append_chat_history_message(self, role, content):
-        self.data[self.chat_history_key].append({
-            "role": role,
-            "content": content
-        })
+        if self.chat_history_key is None:
+            self.data[self.chat_history_key]= {
+                "role": role,
+                "content": content
+            }
+
+        else:
+            self.data[self.chat_history_key].append({
+                "role": role,
+                "content": content
+            })
 
     def update_data(self, message):
         super().update_data(message)
@@ -349,7 +357,7 @@ class ConversationFSMState(LLMFSMState):
         self.append_chat_history_message("assistant", self.data[self.assistant_answer_key])
 
     def get_prompt_system_message(self):
-        system_message = self.get_prompt_system_message()
+        system_message = super().get_prompt_system_message()
         if system_message:
             return system_message
 
@@ -397,15 +405,17 @@ class ConversationFSMState(LLMFSMState):
         if self.restart_chat_history:
             return []
         else:
-            chat_history = self.data[self.chat_history_key]
-
-            return chat_history
+            chat_history = self.data.get(self.chat_history_key)
+            if chat_history:
+                return chat_history
+            else:
+                return []
 
     def get_clone_kwargs(self):
         kwargs = super().get_clone_kwargs()
-        kwargs["user_input_key"] = self.user_input_key,
-        kwargs["chat_history_key"] = self.chat_history_key,
-        kwargs["restart_chat_history"] = self.restart_chat_history,
+        kwargs["user_input_key"] = self.user_input_key
+        kwargs["chat_history_key"] = self.chat_history_key
+        kwargs["restart_chat_history"] = self.restart_chat_history
         kwargs["preprocess_input"] = self._preprocess_input
         kwargs["goal"] = self.goal
         kwargs["responses_per_user_intent"] = self.responses_per_user_intent

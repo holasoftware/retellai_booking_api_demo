@@ -1,8 +1,9 @@
 import logging
 import datetime
+import asyncio
 
 
-from llm_fsm import ConversationalLLMStateMachine
+from llm_fsm import ConversationalLLMStateMachine, FSMError
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +319,7 @@ def appointment_state_system_message(data):
     appointment_date = data.get("appointment_date")
 
     if appointment_date:
-        time_slots = data["computed_values"]["time_slots"]
+        time_slots = data["precomputed_values"]["time_slots"]
 
         if len(time_slots) == 0:
             system_message += "Tell to the user that there is no available time slot for this date %s and ask for a different date" % appointment_date
@@ -343,7 +344,7 @@ def appointment_confirm_state_system_message(data):
 
 
 def create_appointment_chatbot():
-    state_machine = ConversationalLLMStateMachine(initial_state="general_inquiries", default_llm_model="gpt-4o-mini", common_tools=[end_call_tool, detect_user_intent_tool])
+    state_machine = ConversationalLLMStateMachine(initial_state=INFORMATION_INQUIRY_STATE, default_llm_model="gpt-4o-mini", common_tools=[end_call_tool, detect_user_intent_tool])
 
     @state_machine.define_state(state_key=INFORMATION_INQUIRY_STATE, system_message=get_generic_system_message, tools=[ask_schedule_appointment_tool])
     def information_inquiry(data):
@@ -391,5 +392,22 @@ def create_appointment_chatbot():
     return state_machine
 
 
-if __name__ == "__main__":
+async def main():
     appointment_chatbot = create_appointment_chatbot()
+
+    print("Appointment chatbot\n\n")
+    while True:
+        try:
+            user_input = input("You>")
+            answer = await appointment_chatbot.ask(user_input)
+
+            print("\nBot>" + answer)
+        except KeyboardInterrupt:
+            break
+        except FSMError as e:
+            print(e)
+            break
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
